@@ -1,0 +1,832 @@
+---
+title: "FED CHALLENGE"
+author: "Gamma 4--Marty Harris, Abhishek Agrawal, John Henderson, Clyde Fomunung, Mark Bearden"
+date: "December 1, 2018"
+output:
+  word_document: default
+---
+![](C:\Users\Martin\Documents\MBA\Econ\FRED.png)
+
+# Executive Summary
+    We recommend that the Federal Reserve set a target interest rate of 1.47% for the upcoming year. This is based on examining economic indicators from the most recent business cycle that began on December 01, 2007. We believe that, ceteris paribus, this will keep inflation around 2.5%. Additionally our model projects that unemployment will rise towards the end of next year to approximately 3.82%. Reducing the federal funds borrowing rate to from the 2.25% target rate from this year will help combat this rising unemployment rate. 
+    
+### Background
+
+Paul Volcker took office as Chairman of the Board of Governors of the Federal Reserve on August 06, 1979. He enacted new ideas that set the foundations for US monetary policy today. To that end when predicting an effective federal funds rate we used monthly data from August 1979 to the Present.
+
+### Preparing Data and R Packages
+We use the programming language R to import all required data using the "quantmod" package. This package pull directly from the FRED Database. This method allows us to use raw data to create plots and make interpretations from the data sets.
+
+# Forecasting the Federal Funds Rate
+
+We use a step-wise logistic regression to find the ten most significant predictors of a recession from the required data sets. We then forecast these ten variables for the next 12 months using an Auto-Regressive Integrated Moving Average (ARIMA) model. Using these forecasts, we predict the next 12 months' effective federal funds rate using a Dynamic Regression Model.
+
+The Volcker Era the Step-wise model is accurate in predicting 98.85% of recessions. Using this as a baseline we recognize that these economic indicators are predictive of potential recessions. As such, we use the ten most important features use these indicators to forecast a recommended Federal Funds rate for the next 12 months. These features include GDP, Real Exports, Housing Starts, Consumer Price Index for All Urban Consumers: All Items Less Food and Energy, Average Hours Worked, Unemployment Rate, University of Michigan: Consumer Sentiment, The 1-Year Treasury Maturity Rate, Total Non-Farm Payrolls, and The 10-Year Treasury Maturity Rate.
+
+ 
+```{r eval = TRUE, echo= T}
+# Start environment in which to store data 
+data <- new.env()
+
+# Set dates
+date.start <- "1979-08-06"
+date.end <- "2018-11-30"
+
+# Set tickers
+tickers <- c("EXPGSC1", "RETAILSMNSA", "BOPGSTB",
+             "UMCSENT","GDPC1","PAYEMS","PCEC96",
+             "PSAVERT","PSAVE","MCUMFN","FEDFUNDS",
+             "DGS1","DGS10","UNRATE","CPIAUCSL",
+             "CPILFESL","DEXUSEU","AVHWPEUSA065NRUG",
+             "HOUST","INDPRO","NEWORDER","OPHNFB",
+             "ISRATIO","USREC")
+
+#Load Libraries
+suppressMessages(suppressWarnings(library("data.table")))
+suppressMessages(suppressWarnings(library("forecast")))
+suppressMessages(suppressWarnings(library("quantmod")))
+suppressMessages(suppressWarnings(library('ggplot2')))
+suppressMessages(suppressWarnings(library("ggthemes")))
+suppressMessages(suppressWarnings(library("MASS")))
+suppressMessages(suppressWarnings(library("caret")))
+# Import data from FRED database
+getSymbols( tickers
+            , src = "FRED"  
+            , env = data
+            , adjust = TRUE
+)
+```
+
+Fed Funds rate is excluded from initial analysis since we will forecast using this data later. Below we clean up the data to put it into a form for analysis. 
+
+```{r eval = TRUE, echo= T}
+# data cleaning
+set.seed(2011)
+# extracting data from envrionnment 
+df1 <- data.frame(
+    merge(data$EXPGSC1,data$RETAILSMNSA,data$BOPGSTB,data$UMCSENT,
+          data$GDPC1,data$PAYEMS,data$PSAVERT,data$PSAVE,
+          data$MCUMFN,data$DGS1,data$DGS10,
+          data$UNRATE,data$CPIAUCSL,data$CPILFESL,data$DEXUSEU,
+          data$AVHWPEUSA065NRUG,data$HOUST,data$INDPRO,data$NEWORDER,
+          data$OPHNFB,data$ISRATIO,data$USREC))
+df1 <- as.xts(df1)
+# na value replacment using linear interpolation and filling with nearest observed
+df1 <- na.approx(df1)
+df1 <- na.locf(df1, fromLast = T)
+# reframing target variable to binomial
+df1$USREC <- ifelse(df1$USREC>.5,1,0)
+#subseting by date range starting with Volkner's start date
+df1 <- df1[paste(date.start,date.end,sep="/")]
+df1 <- as.data.table(df1)
+#change index to date
+names(df1)[names(df)=="index"] <- "date"
+#building a training and test test to determine 
+# Random sample indexes
+train_index <- sample(1:nrow(df1), 0.8 * nrow(df1))
+test_index <- setdiff(1:nrow(df1), train_index)
+
+# Build X_train, y_train, X_test, y_test
+X_train <- df1[train_index,-"USREC"]
+y_train <- df1[train_index, "USREC"]
+
+X_test <- df1[test_index,-"USREC"]
+y_test <- df1[test_index, "USREC"]
+# dropping date column
+X_train$date <- NULL
+X_test$date <- NULL
+
+```
+
+Below we build the recession predictor model. First, we build a general linear model, and conduct a step-wise regression to find the most significant predictors of a recession. We then make predictions of a recession using the test set. The test set is a random 20% of the total data set and the training set was the remaining 80%. We examined the results using a confusion matrix. The model was 98.85% correct in predicting recessions. While this may seem to be an excellent result, it is important to understand that model uses real data to determine that the economy is in a recession. However, we can use this model to find the most significant features in determining an effective federal funds rate. 
+
+```{r eval = TRUE, echo= T}
+#Build linear Model as baseline
+fit <- glm(y_train$USREC~.,family=binomial(),X_train)
+step <- suppressWarnings(stepAIC(fit, direction="both", trace = F))
+summary(step)
+pred <- predict(step,X_test,type="response")
+varImp(step, scale = FALSE)
+# Building a confusion Matrix to test accuracy
+pred_class <- ifelse(pred>.5,1,0)
+y_test[is.na(y_test)] <- 0
+pred_class[is.na(pred_class)] <-0
+confusion_matrix <-confusionMatrix(as.factor(pred_class),as.factor(y_test$USREC))
+confusion_matrix
+```
+
+Using the most important recession predictors, we forecast next 12 months using an ARIMA model. Using these forecasts, we predict the next 12 months' effective federal funds rate using a Dynamic Regression Model. We used the average forecast over the next 12 months to build our recommended target funds rate of 1.47%. 
+
+```{r eval = TRUE, echo= T}
+# Dates 
+start <- "1979-08-06"
+end <- "2018-09-31"
+#extracting data from local eviornment
+y <- data.frame(merge(data$GDPC1,data$FEDFUNDS,data$EXPGSC1,data$HOUST,                 data$CPILFESL,data$AVHWPEUSA065NRUG,data$UNRATE,
+                data$UMCSENT,data$DGS1,data$PAYEMS,data$DGS10))
+# converting to an extensible time series format
+y <- as.xts(y) 
+# na value replacment using linear interpolation and filling with nearest observed
+y <- na.approx(y)
+y <- na.locf(y, fromLast = T)
+y <- na.locf(y)
+# subsetting to dates after Volckner's appointment as Chairman
+y <- y[paste(start,end,sep="/")]
+# putting data into a monthly format
+y <- suppressWarnings(to.monthly(y, OHLC = FALSE))
+# creating feature matrix
+x <- y[,colnames(y) != "FEDFUNDS"]
+# Conducting auto regression for fed funds based on 10 best indicators of recession
+fit <- auto.arima(y$FEDFUNDS, xreg = x)
+summary(fit)
+#GDP FORECAST 12 Months
+FIT1 <- auto.arima(x$GDPC1)
+GDP12 <- forecast(FIT1, h =12)
+#REAL EXPORTS FORECAST 12 Months
+FIT2 <- auto.arima(x$EXPGSC1)
+EXP12 <- forecast(FIT2, h =12)
+#HOUSING STARTS FORECAST 12 Months
+FIT3 <- auto.arima(x$HOUST)
+HOU12 <- forecast(FIT3, h =12)
+#CPILESS FORECAST 12 Months
+FIT4 <- auto.arima(x$CPILFESL)
+CPIL12 <- forecast(FIT4, h =12)
+#HOURS WORKED FORECAST 12 Months
+FIT5 <- auto.arima(x$AVHWPEUSA065NRUG)
+HOUR12 <- forecast(FIT5, h =12)
+#UNEMPLOYMENT FORECAST 12 Months
+FIT6 <- auto.arima(x$UNRATE)
+UNR12 <- forecast(FIT6, h =12)
+#Consumer Sentiment FORECAST 12 Months
+FIT7 <- auto.arima(x$UMCSENT)
+CSENT12 <- forecast(FIT7, h =12)
+#1 yr treasury FORECAST 12 Months
+FIT8 <- auto.arima(x$DGS1)
+onyr <- forecast(FIT8, h =12)
+#BOP FORECAST 12 Months
+FIT9 <- auto.arima(x$PAYEMS)
+BOP12 <- forecast(FIT9, h =12)
+#10 yr treasury FORECAST 12 Months
+FIT10 <- auto.arima(x$DGS10)
+tnyr <- forecast(FIT10, h =12)
+
+#Building Predictor matrix based on 12 months forecasts
+x1 <- cbind(GDP12$mean,EXP12$mean,HOU12$mean,CPIL12$mean,HOUR12$mean,
+            UNR12$mean,CSENT12$mean,onyr$mean,BOP12$mean,tnyr$mean)
+
+# forcasting FED funds target rate for next 12 months certis paribus econ forecasts hold 
+fed12mos <- forecast(fit, xreg =x1)
+fedfunds_mean <- fed12mos$mean
+checkresiduals(fed12mos)
+autoplot(fed12mos) + 
+    xlim(35,45)+
+    ylim(0,5)+
+    theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Federal Funds Forecasts with ARIMA(1,0,2)(2,0,0)", 
+         x="Period",
+         y="Fed Funds Rate")
+    
+mean(fedfunds_mean)
+
+```
+
+## Analysis of Current Business Cycle Indicators
+
+We analyzed 20 different Economic Indicators to understand what is being measured in the economy as a whole. These Indicators included the following graphs:
+
+1. Civilian Unemployment Rate
+2. Core Consumer Price Index or Personal Consumption Expenditures
+3. Headline Consumer Price Index or Personal Consumption Expenditures
+4. Effective Federal Funds Rate
+5. Real Gross Domestic Product
+6. Total Non-farm Payrolls Employment
+7. Capacity Utilization
+8. Consumption and Saving
+9. Dollar/Euro Exchange Rate
+10. Hours Worked
+11. Housing Starts
+12. Manufacturing Production
+13. New Orders Capital Goods (Ex Aircraft)
+14. Output Per Hour of All Persons
+15. Ratio of Inventories to Sales
+16. Real Exports
+17. Retail Sales
+18. Trade Balance on Goods and Services
+19. University of Michigan: Consumer Sentiment
+20. Yield on 10-Year Treasury Bond
+
+All Graphs within the document are built using the "ggplot2" graphing packages using the economist theme. 
+
+#### Getting Required Data
+
+```{r eval = TRUE}
+# environment in which to store data 
+data <- new.env()
+
+# set dates
+date.start <- "2006-12-31"
+date.end <- "2018-11-30"
+
+# set tickers
+# set tickers
+tickers <- c("EXPGSC1", "RETAILSMNSA", "BOPGSTB",
+             "UMCSENT","GDPC1","PAYEMS","PCEC96",
+             "PSAVERT","PSAVE","MCUMFN","FEDFUNDS",
+             "DGS1","DGS10","UNRATE","CPIAUCSL",
+             "CPILFESL","DEXUSEU","AVHWPEUSA065NRUG",
+             "HOUST","INDPRO","NEWORDER","OPHNFB",
+             "ISRATIO","PCEPILFE","PCEPI")
+
+# import data from FRED database
+suppressMessages(getSymbols( tickers
+            , src = "FRED"  
+            , env = data
+            , adjust = TRUE
+))
+```
+#### Example Preprocessing and Graph
+
+The code chunk below represents the preprocessing needed to disassemble the selected FRED indicator to build a graph to analyze the current business cycle from January 1, 2007 till the present. For the Selected questions that follow, the shaded horizontal area represents the most recent recessionary period from December 12, 2007 until June 01, 2009.
+
+```{r eval = TRUE}
+GDP <- as.zoo(data$GDPC1[paste(date.start,date.end,sep="/")])
+head(GDP)
+p <- autoplot(GDP)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Real Gross Domestic Product", 
+         x="Date",
+         y="GDP Dollars")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+
+```
+
+
+## Questions Related to Macroeconomic Indicators of the Federal Funds Rate
+
+#### Civilian Unemployment Rate
+```{r eval = TRUE, echo= F}
+rate <- as.zoo(data$UNRATE[paste(date.start,date.end,sep="/")])
+head(rate)
+p <- autoplot(rate)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Civilian Unemployment Rate", 
+         x="Date",
+         y="Rate")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Define the unemployment rate.
+
+The percentage of the labor force that is not employed, but is job seeking
+
+2. Are full time students unemployed? Retired people? A person who has given up looking for a job because he or she doesn't believe there are any jobs available?
+
+Full time students and retirees are not considered unemployed as they are not considered as part of the active labor force. People who have given up looking for jobs are also not considered unemployed as they have removed themselves from the labor force by giving up searching.
+
+3. What does the unemployment rate tell us about current resource utilization and output gap in the economy?
+
+Resource utilization is high and the output gap is small which is reflected in the very low level of unemployment as almost all available labor is being utilized.
+
+4. Can you tell the NAIRU from the current unemployment rate?
+
+ No, they are two different measures. The NAIRU is a measure of unemployment that the economy should have based on frictional and structural factors, while the unemployment rate is a measure of what is actually occurring in the economy.
+
+#### Core Consumer Price Index and Personal Consumption Expenditure
+
+```{r eval = TRUE, echo= F}
+CPIAUCSL  <- as.zoo(data$CPIAUCSL [paste(date.start,date.end,sep="/")])
+head(CPIAUCSL)
+p <- autoplot(CPIAUCSL)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Core CPI and PCE", 
+         x="Date",
+         y="CPI")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Define the CPI and PCE price indices.
+
+    CPI:  Measure of the weighted average of prices for a fixed basket of goods and services.
+
+	PCE: Measure of price changes in consumer goods and services for all actual expenditures of households.
+
+2. Explain the difference between headline and core measures of inflation.
+
+Headline measures inflation across all products, while core inflation removes the most volatile products, food and energy.
+
+3. Which measure is higher right now: headline or core inflation? What does that tell you about food and energy inflation?
+
+Core inflation is currently higher. Energy prices are severely deflated compared to the base year thereby dragging headline inflation below core inflation.
+
+4. Are these measures consistent with indicators of the output gap? Explain.
+
+Yes, these measures of inflation can be used as indicators of the output gap by comparing inflation to expected inflation.
+
+#### Headline Consumer Price Index and Personal Consumption Expenditure
+
+```{r eval = TRUE, echo= F}
+ CPILFESL <- as.zoo(data$CPILFESL[paste(date.start,date.end,sep="/")])
+head(CPILFESL)
+p <- autoplot(CPILFESL)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Headline CPI and PCE", 
+         x="Date",
+         y="HCPI")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+#### Effective Federal Funds Rate
+
+```{r eval = TRUE, echo= F}
+fedfund <- as.zoo(data$FEDFUNDS[paste(date.start,date.end,sep="/")])
+head(fedfund)
+p <- autoplot(fedfund)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Effective Federal Funds Rate", 
+         x="Date",
+         y="Percentage")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. What is the federal funds rate?
+
+The interest rate at which banks lend to other banks overnight.
+
+2. How does monetary policy influence the federal funds rate?
+
+The Fed buys or sells securities from member banks in order to push the funds rate towards the set target. The Fed Funds rate is used to control inflation.
+
+3. What is the approximate current level of the effective federal funds rate?
+
+2.25%
+
+4. Why has monetary policy kept the rate so low in recent months?
+
+In order to combat the great recession to encourage economic growth.
+
+#### Real Gross Domestic Product
+
+```{r eval = TRUE, echo= FALSE}
+GDP <- as.zoo(data$GDPC1[paste(date.start,date.end,sep="/")])
+head(GDP)
+p <- autoplot(GDP)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Real Gross Domestic Product", 
+         x="Date",
+         y="GDP Dollars")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+
+```
+
+1. Define gross domestic product. What is "real" GDP?
+
+GDP is the monetary value of all finished goods and services produced within a country's border. GDP includes all private and public consumption, government outlays, investments, private inventories, paid-in construction costs and the foreign balance of trade. Broad measurement of a nation's overall economic activity.
+
+Real GDP is inflation-adjusted GDP expressed in a base-year's prices.
+
+2. What do changes in real gross domestic product tell us about the economy?
+
+Changes in real GDP show us trends within the nation's overall economic activity. 
+
+3. Given the evidence in the chart, would you judge the U.S. economy to be growing at faster than, slower than, or at about the sustainable rate?
+
+An ideal, sustainable GDP rate is between 2-3%.
+
+The US economy is growing at slower than the sustainable rate.
+
+4. If the U.S. is growing faster than the long run sustainable rate, does that necessarily mean that that the Fed should raise interest rates immediately? Why or why not?
+
+No. There could be other reasons to allow continued accommodation policy even if the economy is showing healthy growth. For example, raising interest rates too quickly can invert the yield curve which usually leads to a recession.
+
+#### Total Nonfarm Payroll Employment
+
+```{r eval = TRUE, echo= F}
+NFARM <- as.zoo(data$PAYEMS[paste(date.start,date.end,sep="/")])
+head(NFARM)
+p <- autoplot(NFARM)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Non-Farm Payrolls", 
+         x="Date",
+         y="Non-Farm Payrolls")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. What do trends in payroll employment tell us about the current output gap and economic activity?
+
+From 2011 on, non-farm payroll employment has increased substantially suggesting US economic activity is strong. This steady increase would also suggest a minimize output gap (i.e. potential and actual economic output is close to the same.) There is also the possibility that actual output could exceed potential.
+
+Output gap: The difference between potential economic output and actual economic output measured via real GDP.
+
+2. What might trends in payroll employment tell us about the future output gap and economic activity?
+
+The generally positive trends suggest that economic activity should continue to be strong, and as the US economy reaches full employment wages should continue to rise as employers attempt to lure employees away from other jobs. 
+However, given the history of business cycles employment will not trend up forever. Eventually employment will decline, coinciding with a decline in overall economic activity. This will lead to an increase in the output gap as potential output exceeds actual.
+
+#### Capacity Utilization
+
+```{r eval = TRUE, echo= F}
+cap <- as.zoo(data$MCUMFN[paste(date.start,date.end,sep="/")])
+head(cap)
+p <- autoplot(cap)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Capacity Utilization", 
+         x="Date",
+         y="Capacity")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Define capacity utilization.
+
+Capacity utilization describes the proportion of potential economic output that an economy is actually realizing. Capacity utilization levels give insight into the overall slack of an economy at a given time.
+
+2. What percent of U.S. capacity is currently being utilized?
+
+Current US capacity utilization is 78.39%.
+
+3. How does this compare to capacity utilization when the unemployment rate is low?
+
+The US unemployment rate is below the natural rate of unemployment today, suggesting it is about as low as possible. Today's capacity utilization of 78.39%, therefore, is a good indicator of what capacity utilization looks like in a low-unemployment environment.
+
+4. What does this chart suggest about the output gap right now?
+
+This relatively high capacity utilization suggests that the output gap should be low if not positive (meaning more actual output than projected.) As we saw in a previously created graph, this is the case.
+
+#### Consumption and Saving
+
+```{r eval = TRUE, echo= F}
+CONS <- as.zoo(data$PCEC96[paste(date.start,date.end,sep="/")])
+head(CONS)
+p <- autoplot(CONS)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Consumption", 
+         x="Date",
+         y="Consumption")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+
+```
+
+#### Dollar/Euro Exchange Rate
+
+```{r eval = TRUE, echo= F}
+DEXUSEU <- as.zoo(data$DEXUSEU[paste(date.start,date.end,sep="/")])
+head(DEXUSEU)
+p <- autoplot(DEXUSEU)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Dollar/Euro Exchange Rate", 
+         x="Date",
+         y="Rate")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. What is an exchange rate? 
+
+The rate when converting between two different currencies. It tells you exactly how much of one currency is valued in another currency.
+
+2. According to the graph below, how many dollars does it take to buy one euro (according to the latest point on the chart)? 
+
+$1.1332 = 1 Euro
+
+3. How many Euros does it take to buy one dollar? 0.88 Euro = $1
+4. According to the graph below, has the number of dollars it takes to buy one euro generally been trending up or down over whole the period shown?
+
+Trending down
+
+5. What does the trend tell you about the price of U.S. goods for Europeans? Europeans tend to pay a lower price for U.S. goods
+6. What does the trend tell you about the price of European goods for Americans? 
+
+Americans tend to pay a higher price for European goods
+
+#### Hours Worked
+
+```{r eval = TRUE, echo= F}
+AVHWPEUSA065NRUG <- as.zoo(data$AVHWPEUSA065NRUG[paste(date.start,date.end,sep="/")])
+head(AVHWPEUSA065NRUG)
+p <- autoplot(AVHWPEUSA065NRUG)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Hours Worked", 
+         x="Date",
+         y="Hours")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+#### Housing Starts
+
+```{r eval = TRUE, echo= F}
+HOUST <- as.zoo(data$HOUST[paste(date.start,date.end,sep="/")])
+head(HOUST)
+p <- autoplot(HOUST)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Dollar/Euro Exchange Rate", 
+         x="Date",
+         y="Rate")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Describe the recent level and trend in housing starts.
+
+Housing starts represents the number of new houses on which construction has been started in a given period. The most recent level (October 2018) had 1,228,000 and the general trend has been increasing.
+
+2. How are housing starts related to interest rates? If the FED conducted monetary policy to raise interest rates, what do you project would happen to housing starts as a result? 
+
+There is an inverse relationship between housing starts and interest rates, the higher the rates, the lower the amount of housing starts. If interest rates were raised, housing starts would decrease.
+
+3. When people buy new houses, they also tend to buy refrigerators, furniture and other items. If monetary policy was conducted to raise interest rates, what do you think might happen to housing-related consumer spending as a result? 
+
+Housing-related consumer spending would decrease
+
+This indicator shows that the best course of monetary policy is to decrease federal funds rate in order to increase the number of house starts over time.
+
+#### Manufacturing Production
+
+```{r eval = TRUE, echo= F}
+INDPRO <- as.zoo(data$INDPRO[paste(date.start,date.end,sep="/")])
+head(INDPRO)
+p <- autoplot(INDPRO)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Dollar/Euro Exchange Rate", 
+         x="Date",
+         y="Rate")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Define the industrial production index. 
+
+A monthly economic indicator measuring real output for all facilities (manufacturing, mining, electric and gas industries) located in the US relative to a base year. It is published by the Federal Reserve Board (FRB) at the middle of each month.
+
+2. Has the level of industrial production been rising or falling over the last year? 
+
+It has risen over the last year
+
+3. What does this indicate about probable trend in the output gap? 
+
+The probable trend in the output gap, the gap between what the economy can produce and what it is actually producing, will be a decrease over time since IPI keeps increasing.
+
+The best course of monetary policy would be to lower federal funds rate in order to increase IPI.
+
+#### New Orders Capital Goods (Ex Aircraft)
+
+```{r eval = TRUE, echo= F}
+NEWORDER <- as.zoo(data$NEWORDER[paste(date.start,date.end,sep="/")])
+head(NEWORDER)
+p <- autoplot(NEWORDER)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="New Orders Capital Goods (Ex Aircraft)", 
+         x="Date",
+         y="New Orders")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+#### Output Per Hour of All Persons
+
+```{r eval = TRUE, echo= F}
+OPHNFB <- as.zoo(data$OPHNFB[paste(date.start,date.end,sep="/")])
+head(OPHNFB)
+p <- autoplot(OPHNFB)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Output Per Hour of All Persons", 
+         x="Date",
+         y="Output Per Hour")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+
+```
+
+1. Explain what is meant by unit labor cost. How is it calculated by the Bureau of Labor Statistics?
+
+Unit labor cost measures the average cost of labor per unit of the output or in other words it is how much a business pays its workers to produce one unit of output.According to Bureau of Labor Statistics, it can be calculated as ratio of total compensation to total output or it can also be calculated as ratio of compensation per hour worked over output per hour worked.
+
+2. During recessions, what tends to happen to unit labor costs?
+
+As the graph shows that before recession unit labor cost was increasing or constant but post recession, unit labor cost was decreasing. The main reason: labor compensation was increasing but labor productivity was increasing at much faster rate that made unit labor cost to decrease.
+
+3. What do the current measures of unit labor costs say about the likelihood of near term inflation?
+
+Generally, it is considered that the primary determinant of price is cost and since labor cost has a significant share in the total cost, unit labor cost is considered as an indicator of inflation. With several experiments, it is found out that unit labor cost is the leading indicator of inflation peaks and lagging indicator of inflation troughs. As we can see from the graph, the change is unit labor cost is somewhat constant so there is less chance of near-term inflation.
+
+#### Ratio of Inventories to Sales
+```{r eval = TRUE, echo= F}
+ISRATIO <- as.zoo(data$ISRATIO[paste(date.start,date.end,sep="/")])
+head(ISRATIO)
+p <- autoplot(ISRATIO)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Output Per Hour of All Persons", 
+         x="Date",
+         y="Output Per Hour")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+#### Real Exports
+```{r eval = TRUE, echo= F}
+Exports <-as.zoo(data$EXPGSC1[paste(date.start,date.end,sep="/")])
+head(Exports)
+p <- autoplot(Exports)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Real Exports", 
+         x="Date",
+         y="Real Exports")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+#### Retail Sales
+
+```{r eval = TRUE, echo= F}
+Retail <- as.zoo(data$RETAILSMNSA[paste(date.start,date.end,sep="/")])
+head(Retail)
+p <- autoplot(Retail)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Retail Sales", 
+         x="Date",
+         y="Retail Sales")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Retail sales are an indicator of current consumption spending by households. What does the chart below tell you about the likely growth of GDP in current and future quarters?
+
+GDP will likely continue to grow as consumption increases. Consumption is a part of the GDP formula, whereas, GDP = Consumption + Investment + Government Expenditure + Net Exports. 
+
+
+#### Trade Balance on Goods and Services 
+
+```{r eval = TRUE, echo= F}
+BOP <- as.zoo(data$BOPGSTB[paste(date.start,date.end,sep="/")])
+BOP<- as.zoo(BOP)
+head(BOP)
+p <- autoplot(BOP)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Trade balance on Goods and Services", 
+         x="Date",
+         y="Trade Dollars")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Define the trade balance. 
+
+Trade balance is a country's exports minus it imports.
+
+
+
+2. What does the trade balance tell us about the demand for U.S. produced goods and services?
+
+We run a deficit in the trade balance meaning that the US imports more than it exports.
+
+#### University of Michigan: Consumer Sentiment
+
+```{r eval = TRUE, echo= F}
+SENT <- as.zoo(data$UMCSENT[paste(date.start,date.end,sep="/")])
+head(SENT)
+p <- autoplot(SENT)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="Consumer Sentiment: University of Michigan", 
+         x="Date",
+         y="US Consumer Sentiment")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. Why might you be interested in a measure of consumer sentiment?
+Consumer sentiment is seen as a leading indicator of economic downturns.
+
+2. How would you assess current consumer sentiment? On a scale of one to ten, do you think consumers are feeling optimistic or pessimistic?
+
+Consumer sentiment is very high. Which means that consumers are optimistic about the economy. 
+
+3. What important economic variables might this affect in the future?
+
+The indicator can many other including consumption, housing starts, and hours worked.
+
+#### Yield on 10-Year Treasury Bond
+
+```{r eval = TRUE, echo= F}
+tresten <- as.zoo(data$DGS10[paste(date.start,date.end,sep="/")])
+head(tresten)
+p <- autoplot(tresten)
+# Use economist color scales
+p + theme_economist() + 
+    scale_color_fivethirtyeight()+
+    labs(title="10- Year Treasury Constant Maturity Rate", 
+         x="Date",
+         y="Percentage")+
+    geom_rect(aes(xmin = as.Date('2007-12-01'), ymin = -Inf, 
+                  xmax = as.Date('2009-06-01'), ymax = Inf),
+              fill = "steelblue") +
+    geom_path(size = 0.8)
+```
+
+1. What is a bond?
+
+Bonds represent debt obligations - and therefore are a form of borrowing.You loan your money to a company, a city, the government - and they promise to pay you back in full, with regular interest payments. A city may sell bonds to raise money to build a bridge, while the federal government issues bonds to finance its spiraling debts. Bonds are often referred to as fixed income securities because the lender can anticipate the exact amount of cash they will have received if a bond is held until maturity. 
+
+2. What is the relationship between the price of a bond and its yield or current market interest rate?
+
+Interest rates and bond prices have an inverse relationship; so when one goes up, the other goes down.Bond investors, like all investors, typically try to get the best return possible. If current interest rates were to rise, giving newly issued bonds a yield of 10%, then the zero-coupon bond yielding 5.26% would not only be less attractive, it wouldn't be in demand at all. Who wants a 5.26% yield when they can get 10%?
+
+To attract demand, the price of the pre-existing zero-coupon bond would have to decrease enough to match the same return yielded by prevailing interest rates. In this instance, the bond's price would drop from $950 (which gives a 5.26% yield) to $909.09 (which gives a 10% yield).
+
+3. What does the yield on a long-term bond such as the 10-year Treasury bond tell us about expectations about such things as future interest rates and inflation?
+
+Federal Reserve Board's Open Committee(FOMC) is responsible for setting the fed rate. The expectation of future inflation is dependent on the fed rate set by FOMC and market expectation. If the market thinks that fed rate is below the expectation then it is highly expected that future inflation will increase which means long-term interest rate will increase relative to short-term rates. The opposite will happen if the market thinks that the fed rate is above the expectation.
+
+4. How can the Federal Reserve influence long-term interest rates? When might it choose to do this?
+
+Looking at the last 10 years data, we can see that there is a strong correlation between Federal fund rate (which directly mean the way by which fed can use its reserve) and 1- year treasury constant maturity rate. We can also see that interest rate of 10- year treasury bond does not track closely with the Fed fund rate. This means that changing Fed fund rate can affect short-term interest rates but it will not have any significant impact on the long-term interest rate.
+Generally, long-term interest rates are set by market supply and demand so it leaves a little scope for the Fed to control it.
+
